@@ -30,6 +30,13 @@ fn generate_unique_server_key(
     name: &str,
 ) -> crate::shared::error::AppResult<String> {
     let base = suggest_key(name);
+    generate_unique_server_key_from_base(conn, &base)
+}
+
+fn generate_unique_server_key_from_base(
+    conn: &Connection,
+    base: &str,
+) -> crate::shared::error::AppResult<String> {
     let base = base.trim();
     let base = if base.is_empty() { "mcp-server" } else { base };
 
@@ -552,7 +559,13 @@ LIMIT 1
 
     match existing_id {
         None => {
-            let resolved_key = generate_unique_server_key(tx, name)?;
+            let provided_key = input.server_key.trim();
+            let resolved_key = if provided_key.is_empty() {
+                generate_unique_server_key(tx, name)?
+            } else {
+                validate_server_key(provided_key)?;
+                generate_unique_server_key_from_base(tx, provided_key)?
+            };
             tx.execute(
                 r#"
 INSERT INTO mcp_servers(

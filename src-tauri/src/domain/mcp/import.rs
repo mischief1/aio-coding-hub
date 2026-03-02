@@ -11,7 +11,7 @@ use super::backups::CliBackupSnapshots;
 use super::db::{list_for_workspace, upsert_by_name};
 use super::sync::sync_all_cli;
 use super::types::{McpImportReport, McpImportServer, McpImportSkip, McpParseResult};
-use super::validate::suggest_key;
+use super::validate::{suggest_key, validate_server_key};
 use crate::shared::text::normalize_name;
 
 fn is_code_switch_r_shape(root: &serde_json::Value) -> bool {
@@ -40,6 +40,19 @@ fn ensure_unique_key(base: &str, used: &mut HashSet<String>) -> String {
     let fallback = format!("mcp-{}", now_unix_seconds());
     used.insert(fallback.clone());
     fallback
+}
+
+fn preserve_import_key_or_suggest(raw_key: &str, fallback_name: &str) -> String {
+    let trimmed = raw_key.trim();
+    if trimmed.is_empty() {
+        return suggest_key(fallback_name);
+    }
+
+    if validate_server_key(trimmed).is_ok() {
+        return trimmed.to_string();
+    }
+
+    suggest_key(trimmed)
 }
 
 fn extract_string_array(value: Option<&serde_json::Value>) -> Vec<String> {
@@ -175,7 +188,7 @@ fn parse_json_server_entry(
     }
 
     Ok(McpImportServer {
-        server_key: suggest_key(&name),
+        server_key: preserve_import_key_or_suggest(&name, &name),
         name,
         transport,
         command,
@@ -199,7 +212,7 @@ fn parse_json_mcp_servers_map(
 
     for (key, entry) in servers_obj {
         let mut server = parse_json_server_entry(Some(key), entry)?;
-        let base = suggest_key(&server.name);
+        let base = preserve_import_key_or_suggest(key, &server.name);
         server.server_key = ensure_unique_key(&base, &mut used_keys);
         out.push(server);
     }
@@ -283,7 +296,7 @@ fn parse_codex_toml_mcp_servers(toml_text: &str) -> Result<Vec<McpImportServer>,
         }
 
         let name = key.to_string();
-        let base = suggest_key(&name);
+        let base = preserve_import_key_or_suggest(key, &name);
         let server_key = ensure_unique_key(&base, &mut used_keys);
 
         out.push(McpImportServer {
@@ -395,7 +408,7 @@ fn parse_code_switch_r(root: &serde_json::Value) -> Result<Vec<McpImportServer>,
     let mut out: Vec<McpImportServer> = by_name
         .into_values()
         .map(|mut item| {
-            let base = suggest_key(&item.name);
+            let base = preserve_import_key_or_suggest(&item.name, &item.name);
             let key = ensure_unique_key(&base, &mut used_keys);
             item.server_key = key;
             item

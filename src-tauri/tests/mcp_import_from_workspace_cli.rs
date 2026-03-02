@@ -88,3 +88,55 @@ FOO = "bar"
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].get("command").and_then(|v| v.as_str()), Some("uvx"));
 }
+
+#[test]
+fn mcp_import_from_workspace_cli_preserves_server_key_casing() {
+    let app = support::TestApp::new();
+    let handle = app.handle();
+
+    let source = json!({
+      "mcpServers": {
+        "AMap": {
+          "type": "stdio",
+          "command": "node",
+          "args": ["D:/tools/mcp/amap-maps/start.mjs"],
+          "env": {"AMAP_MAPS_API_KEY": "xxx"}
+        }
+      }
+    });
+
+    let bytes = serde_json::to_vec(&source).expect("json bytes");
+    aio_coding_hub_lib::test_support::mcp_restore_target_bytes(&handle, "claude", Some(bytes))
+        .expect("write claude target");
+
+    let workspace_id =
+        aio_coding_hub_lib::test_support::workspace_active_id_by_cli(&handle, "claude")
+            .expect("claude active workspace");
+
+    let report =
+        aio_coding_hub_lib::test_support::mcp_import_from_workspace_cli_json(&handle, workspace_id)
+            .expect("import from workspace cli");
+
+    assert_eq!(report.get("inserted").and_then(|v| v.as_u64()), Some(1));
+    assert_eq!(report.get("updated").and_then(|v| v.as_u64()), Some(0));
+
+    let rows = aio_coding_hub_lib::test_support::mcp_servers_list_json(&handle, workspace_id)
+        .expect("list imported rows");
+    let rows = rows.as_array().cloned().unwrap_or_default();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].get("server_key").and_then(|v| v.as_str()),
+        Some("AMap")
+    );
+
+    let synced = aio_coding_hub_lib::test_support::mcp_read_target_bytes(&handle, "claude")
+        .expect("read synced claude target")
+        .expect("synced claude target must exist");
+    let root: serde_json::Value = serde_json::from_slice(&synced).expect("parse synced json");
+    let servers = root
+        .get("mcpServers")
+        .and_then(|v| v.as_object())
+        .expect("mcpServers object");
+    assert!(servers.contains_key("AMap"));
+    assert!(!servers.contains_key("amap"));
+}
