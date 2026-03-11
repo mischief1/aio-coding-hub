@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.30.14](https://github.com/dyndynjyxa/aio-coding-hub/compare/aio-coding-hub-v0.30.13...aio-coding-hub-v0.30.14) (2026-03-11)
+
+
+### Features
+
+* **usage:** 添加供应商过滤支持以改进使用统计查询 ([e2178d9](https://github.com/dyndynjyxa/aio-coding-hub/commit/e2178d93ae413307cd4bb5f830c30550a6e0af1d))
+
+
+### Performance Improvements
+
+* **home:** 优化实时追踪卡片动画与样式过渡效果 ([48c9966](https://github.com/dyndynjyxa/aio-coding-hub/commit/48c99669d5658884bc594dcebdb35219d0c25e23))
+
 ## [0.30.13](https://github.com/dyndynjyxa/aio-coding-hub/compare/aio-coding-hub-v0.30.12...aio-coding-hub-v0.30.13) (2026-03-10)
 
 
