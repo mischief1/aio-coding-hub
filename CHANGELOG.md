@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.30.15](https://github.com/dyndynjyxa/aio-coding-hub/compare/aio-coding-hub-v0.30.14...aio-coding-hub-v0.30.15) (2026-03-12)
+
+
+### Features
+
+* **wsl:** 完善 WSL 会话浏览、MCP/提示词同步及删除功能，补充前端测试覆盖率 ([b1308a1](https://github.com/dyndynjyxa/aio-coding-hub/commit/b1308a1e7f3eaf7e871862f3119d7678be72c6aa))
+* **wsl:** 支持浏览 WSL 环境中的 CLI 会话记录，增加wsl提示词和mcp同步，并有可见提示 ([6147df2](https://github.com/dyndynjyxa/aio-coding-hub/commit/6147df28f904798b7d8e02c5e5946ec3453187c6))
+* **wsl:** 支持浏览 WSL 环境中的 CLI 会话记录，增加wsl提示词和mcp同步，并有可见提示 ([41d7d26](https://github.com/dyndynjyxa/aio-coding-hub/commit/41d7d2661a03a3dea90bcb63a06f384fde1ac31a))
+
+
+### Bug Fixes
+
+* **wsl:** 修正同步边界与 sessions 状态 ([cc41840](https://github.com/dyndynjyxa/aio-coding-hub/commit/cc41840fb88744c926544436cf885b440f240403))
+
 ## [0.30.14](https://github.com/dyndynjyxa/aio-coding-hub/compare/aio-coding-hub-v0.30.13...aio-coding-hub-v0.30.14) (2026-03-11)
 
 
