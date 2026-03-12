@@ -144,20 +144,14 @@ pub(crate) async fn wsl_configure_clients(
 
     let proxy_origin = format!("http://{}", gateway::listen::format_host_port(&host, port));
     let distros = detection.distros;
-    let targets = settings::WslTargetCli {
-        claude: true,
-        codex: true,
-        gemini: true,
-    };
+    let targets = cfg.wsl_target_cli;
 
     // Gather MCP and Prompt sync data from DB
     let (mcp_data, prompt_data) = blocking::run("wsl_configure_gather_sync_data", {
         let db = db.clone();
-        let app = app.clone();
-        let first_distro = distros.first().cloned().unwrap_or_default();
         move || -> crate::shared::error::AppResult<(wsl::WslMcpSyncData, wsl::WslPromptSyncData)> {
             let conn = db.open_connection()?;
-            let mcp = wsl::gather_mcp_sync_data(&conn, &app, &first_distro)?;
+            let mcp = wsl::gather_mcp_sync_data(&conn)?;
             let prompts = wsl::gather_prompt_sync_data(&conn)?;
             Ok((mcp, prompts))
         }
@@ -169,10 +163,10 @@ pub(crate) async fn wsl_configure_clients(
         "wsl_configure_clients",
         move || -> crate::shared::error::AppResult<wsl::WslConfigureReport> {
             Ok(wsl::configure_clients(
+                &app_for_sync,
                 &distros,
                 &targets,
                 &proxy_origin,
-                Some(&app_for_sync),
                 Some(&mcp_data),
                 Some(&prompt_data),
             ))
@@ -266,11 +260,9 @@ pub(crate) async fn wsl_auto_sync_core(app: &tauri::AppHandle) -> Result<(), Str
 
     let (mcp_data, prompt_data) = blocking::run("wsl_core_gather_sync_data", {
         let db = db.clone();
-        let app = app.clone();
-        let first_distro = distros.first().cloned().unwrap_or_default();
         move || -> crate::shared::error::AppResult<(wsl::WslMcpSyncData, wsl::WslPromptSyncData)> {
             let conn = db.open_connection()?;
-            let mcp = wsl::gather_mcp_sync_data(&conn, &app, &first_distro)?;
+            let mcp = wsl::gather_mcp_sync_data(&conn)?;
             let prompts = wsl::gather_prompt_sync_data(&conn)?;
             Ok((mcp, prompts))
         }
@@ -284,10 +276,10 @@ pub(crate) async fn wsl_auto_sync_core(app: &tauri::AppHandle) -> Result<(), Str
         "wsl_core_configure",
         move || -> crate::shared::error::AppResult<wsl::WslConfigureReport> {
             Ok(wsl::configure_clients(
+                &app_for_sync,
                 &distros,
                 &targets,
                 &proxy_origin,
-                Some(&app_for_sync),
                 Some(&mcp_data),
                 Some(&prompt_data),
             ))
@@ -446,21 +438,14 @@ async fn do_wsl_auto_configure(
 
     let proxy_origin = format!("http://{}", gateway::listen::format_host_port(&host, port));
 
-    // Configure all CLI targets by default
-    let targets = settings::WslTargetCli {
-        claude: true,
-        codex: true,
-        gemini: true,
-    };
+    let targets = cfg.wsl_target_cli;
 
     // Gather MCP and Prompt sync data
     let (mcp_data, prompt_data) = blocking::run("wsl_startup_gather_sync_data", {
         let db = db.clone();
-        let app = app.clone();
-        let first_distro = distros.first().cloned().unwrap_or_default();
         move || -> crate::shared::error::AppResult<(wsl::WslMcpSyncData, wsl::WslPromptSyncData)> {
             let conn = db.open_connection()?;
-            let mcp = wsl::gather_mcp_sync_data(&conn, &app, &first_distro)?;
+            let mcp = wsl::gather_mcp_sync_data(&conn)?;
             let prompts = wsl::gather_prompt_sync_data(&conn)?;
             Ok((mcp, prompts))
         }
@@ -474,10 +459,10 @@ async fn do_wsl_auto_configure(
         "wsl_startup_configure",
         move || -> crate::shared::error::AppResult<wsl::WslConfigureReport> {
             Ok(wsl::configure_clients(
+                &app_for_sync,
                 &distros_owned,
                 &targets,
                 &proxy_origin,
-                Some(&app_for_sync),
                 Some(&mcp_data),
                 Some(&prompt_data),
             ))

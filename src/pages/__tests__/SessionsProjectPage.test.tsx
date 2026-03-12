@@ -1,9 +1,10 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestQueryClient } from "../../test/utils/reactQuery";
 import { setTauriRuntime } from "../../test/utils/tauriRuntime";
+vi.mock("sonner", () => ({ toast: vi.fn() }));
 vi.mock("../../services/clipboard", () => ({ copyText: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: ({ count }: { count: number }) => {
@@ -28,9 +29,14 @@ vi.mock("../../services/cliSessions", async () => {
     ...actual,
     cliSessionsProjectsList: vi.fn().mockResolvedValue([]),
     cliSessionsSessionsList: vi.fn().mockResolvedValue([]),
+    cliSessionsSessionDelete: vi.fn().mockResolvedValue([]),
   };
 });
-import { cliSessionsSessionsList, cliSessionsProjectsList } from "../../services/cliSessions";
+import {
+  cliSessionsSessionDelete,
+  cliSessionsSessionsList,
+  cliSessionsProjectsList,
+} from "../../services/cliSessions";
 import { SessionsProjectPage } from "../SessionsProjectPage";
 function renderWithRoute(route: string) {
   const client = createTestQueryClient();
@@ -51,6 +57,7 @@ describe("pages/SessionsProjectPage", () => {
     setTauriRuntime();
     vi.mocked(cliSessionsProjectsList).mockResolvedValue([]);
     vi.mocked(cliSessionsSessionsList).mockResolvedValue([]);
+    vi.mocked(cliSessionsSessionDelete).mockResolvedValue([]);
   });
   it("renders error state for invalid source", () => {
     setTauriRuntime();
@@ -304,5 +311,67 @@ describe("pages/SessionsProjectPage", () => {
     vi.mocked(cliSessionsSessionsList).mockResolvedValue([]);
     renderWithRoute("/sessions/claude/proj1?distro=Ubuntu");
     expect(await screen.findByText(/WSL: Ubuntu/)).toBeInTheDocument();
+  });
+
+  it("deletes only currently visible selected sessions after filtering", async () => {
+    setTauriRuntime();
+    vi.mocked(cliSessionsSessionsList).mockResolvedValue([
+      {
+        source: "claude",
+        session_id: "s-1",
+        file_path: "/f1.json",
+        first_prompt: "Alpha task",
+        message_count: 1,
+        created_at: 1740000000,
+        modified_at: 1740000000,
+        git_branch: null,
+        project_path: null,
+        is_sidechain: null,
+        cwd: null,
+        model_provider: null,
+        cli_version: null,
+        wsl_distro: null,
+      },
+      {
+        source: "claude",
+        session_id: "s-2",
+        file_path: "/f2.json",
+        first_prompt: "Beta task",
+        message_count: 1,
+        created_at: 1740000000,
+        modified_at: 1740000000,
+        git_branch: null,
+        project_path: null,
+        is_sidechain: null,
+        cwd: null,
+        model_provider: null,
+        cli_version: null,
+        wsl_distro: null,
+      },
+    ]);
+
+    renderWithRoute("/sessions/claude/proj1");
+
+    expect(await screen.findByText("Alpha task")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("选择会话 Alpha task"));
+    fireEvent.click(screen.getByLabelText("选择会话 Beta task"));
+    expect(screen.getByRole("button", { name: "删除 (2)" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("搜索会话"), { target: { value: "Beta" } });
+
+    await screen.findByText("Beta task");
+    expect(screen.queryByText("Alpha task")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除 (1)" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "删除 (1)" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除 (1)" }));
+
+    await waitFor(() => {
+      expect(cliSessionsSessionDelete).toHaveBeenCalledWith({
+        source: "claude",
+        file_paths: ["/f2.json"],
+        wsl_distro: undefined,
+      });
+    });
   });
 });

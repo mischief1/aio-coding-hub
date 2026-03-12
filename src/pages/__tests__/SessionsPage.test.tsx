@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestQueryClient } from "../../test/utils/reactQuery";
@@ -26,13 +26,37 @@ vi.mock("../../services/cliSessions", async () => {
   );
   return { ...actual, cliSessionsProjectsList: vi.fn().mockResolvedValue([]) };
 });
+vi.mock("../../query/wsl", async () => {
+  const actual = await vi.importActual<typeof import("../../query/wsl")>("../../query/wsl");
+  return { ...actual, useWslDetectionQuery: vi.fn() };
+});
 import { cliSessionsProjectsList } from "../../services/cliSessions";
+import { useWslDetectionQuery } from "../../query/wsl";
 import { SessionsPage } from "../SessionsPage";
+
+function LocationDisplay() {
+  const location = useLocation();
+  return <div data-testid="location-display">{`${location.pathname}${location.search}`}</div>;
+}
+
 function renderWithProviders(ui: React.ReactElement, { route = "/" } = {}) {
   const client = createTestQueryClient();
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter>
+      <MemoryRouter initialEntries={[route]}>
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <>
+                {ui}
+                <LocationDisplay />
+              </>
+            }
+          />
+          <Route path="/sessions/:source/:projectId" element={<LocationDisplay />} />
+        </Routes>
+      </MemoryRouter>
     </QueryClientProvider>
   );
 }
@@ -40,6 +64,10 @@ describe("pages/SessionsPage", () => {
   beforeEach(() => {
     setTauriRuntime();
     vi.mocked(cliSessionsProjectsList).mockResolvedValue([]);
+    vi.mocked(useWslDetectionQuery).mockReturnValue({
+      data: null,
+      isFetched: false,
+    } as any);
   });
   it("renders loading state with Tauri runtime", () => {
     setTauriRuntime();
@@ -219,5 +247,45 @@ describe("pages/SessionsPage", () => {
     renderWithProviders(<SessionsPage />, { route: "/?source=claude" });
     const projectBtn = await screen.findByText("ClickMe");
     fireEvent.click(projectBtn);
+  });
+
+  it("preserves distro from URL while WSL detection is still loading", async () => {
+    const originalUserAgent = window.navigator.userAgent;
+    Object.defineProperty(window.navigator, "userAgent", {
+      value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+      configurable: true,
+    });
+
+    vi.mocked(useWslDetectionQuery).mockReturnValue({
+      data: null,
+      isFetched: false,
+    } as any);
+    vi.mocked(cliSessionsProjectsList).mockResolvedValue([
+      {
+        source: "claude",
+        id: "proj-1",
+        display_path: "/wsl/project",
+        short_name: "WSL Project",
+        session_count: 1,
+        last_modified: 1740000000,
+        model_provider: null,
+        wsl_distro: "Ubuntu",
+      },
+    ]);
+
+    renderWithProviders(<SessionsPage />, { route: "/?source=claude&distro=Ubuntu" });
+
+    expect(await screen.findByText("WSL Project")).toBeInTheDocument();
+    expect(cliSessionsProjectsList).toHaveBeenCalledWith("claude", "Ubuntu");
+
+    fireEvent.click(screen.getByText("WSL Project"));
+    expect(screen.getByTestId("location-display")).toHaveTextContent(
+      "/sessions/claude/proj-1?distro=Ubuntu"
+    );
+
+    Object.defineProperty(window.navigator, "userAgent", {
+      value: originalUserAgent,
+      configurable: true,
+    });
   });
 });

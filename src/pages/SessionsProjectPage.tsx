@@ -1,6 +1,6 @@
 // Usage: Project sessions list. Backend command: `cli_sessions_sessions_list`.
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Clock, Copy, GitBranch, MessageSquare, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -142,6 +142,41 @@ export function SessionsProjectPage() {
     estimateSize: () => 100,
     overscan: 10,
   });
+  const visibleSelectedCount = useMemo(() => {
+    let count = 0;
+    for (const session of filteredSessions) {
+      if (selectedPaths.has(session.file_path)) {
+        count += 1;
+      }
+    }
+    return count;
+  }, [filteredSessions, selectedPaths]);
+  const allVisibleSelected =
+    filteredSessions.length > 0 && visibleSelectedCount === filteredSessions.length;
+  const selectedVisibleSessions = useMemo(() => {
+    return filteredSessions.filter((session) => selectedPaths.has(session.file_path));
+  }, [filteredSessions, selectedPaths]);
+
+  useEffect(() => {
+    setSelectedPaths(new Set());
+    setShowDeleteDialog(false);
+  }, [distro, projectId, source]);
+
+  useEffect(() => {
+    const visiblePaths = new Set(filteredSessions.map((session) => session.file_path));
+    setSelectedPaths((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const path of prev) {
+        if (visiblePaths.has(path)) {
+          next.add(path);
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [filteredSessions]);
 
   function toggleSelect(filePath: string) {
     setSelectedPaths((prev) => {
@@ -153,7 +188,7 @@ export function SessionsProjectPage() {
   }
 
   function toggleSelectAll() {
-    if (selectedPaths.size === filteredSessions.length) {
+    if (allVisibleSelected) {
       setSelectedPaths(new Set());
     } else {
       setSelectedPaths(new Set(filteredSessions.map((s) => s.file_path)));
@@ -404,9 +439,7 @@ export function SessionsProjectPage() {
             <span>
               <input
                 type="checkbox"
-                checked={
-                  filteredSessions.length > 0 && selectedPaths.size === filteredSessions.length
-                }
+                checked={allVisibleSelected}
                 onChange={toggleSelectAll}
                 className="h-4 w-4 rounded border-slate-300 text-accent focus:ring-accent dark:border-slate-600"
                 aria-label="全选"
@@ -600,14 +633,11 @@ export function SessionsProjectPage() {
       >
         <div className="max-h-40 overflow-auto text-sm text-slate-600 dark:text-slate-400">
           <ul className="space-y-1">
-            {sessions
-              .filter((s) => selectedPaths.has(s.file_path))
-              .slice(0, 10)
-              .map((s) => (
-                <li key={s.file_path} className="truncate">
-                  {sessionTitle(s)}
-                </li>
-              ))}
+            {selectedVisibleSessions.slice(0, 10).map((s) => (
+              <li key={s.file_path} className="truncate">
+                {sessionTitle(s)}
+              </li>
+            ))}
             {selectedPaths.size > 10 && (
               <li className="text-slate-400">...还有 {selectedPaths.size - 10} 个</li>
             )}

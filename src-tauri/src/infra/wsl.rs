@@ -446,13 +446,25 @@ trap - EXIT
     run_wsl_bash_script(distro, &script)
 }
 
+fn remove_wsl_file(distro: &str, path_expr: &str) -> AppResult<()> {
+    let path_escaped = bash_single_quote(path_expr);
+    let script = format!(
+        r#"
+set -euo pipefail
+target={path_escaped}
+rm -f -- "$target"
+"#
+    );
+    run_wsl_bash_script(distro, &script)
+}
+
 // ── MCP/Prompt WSL sync data structures ──
 
 /// MCP sync data for all CLIs, used when syncing to WSL.
 pub struct WslMcpSyncData {
-    pub claude: (Vec<McpServerForSync>, Vec<String>),
-    pub codex: (Vec<McpServerForSync>, Vec<String>),
-    pub gemini: (Vec<McpServerForSync>, Vec<String>),
+    pub claude: Vec<McpServerForSync>,
+    pub codex: Vec<McpServerForSync>,
+    pub gemini: Vec<McpServerForSync>,
 }
 
 /// Prompt sync data for all CLIs, used when syncing to WSL.
@@ -461,6 +473,9 @@ pub struct WslPromptSyncData {
     pub codex_content: Option<String>,
     pub gemini_content: Option<String>,
 }
+
+const WSL_PROMPT_MANIFEST_SCHEMA_VERSION: u32 = 1;
+const WSL_PROMPT_MANAGED_BY: &str = "aio-coding-hub";
 
 // ── WSL MCP manifest ──
 
@@ -522,6 +537,93 @@ fn write_wsl_mcp_manifest(
         .map_err(|e| format!("failed to serialize wsl mcp manifest: {e}"))?;
     std::fs::write(&path, json.as_bytes())
         .map_err(|e| format!("failed to write wsl mcp manifest: {e}"))?;
+    Ok(())
+}
+
+// ── WSL prompt manifest ──
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct WslPromptSyncFileEntry {
+    path: String,
+    existed: bool,
+    backup_rel: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct WslPromptManifest {
+    schema_version: u32,
+    managed_by: String,
+    distro: String,
+    cli_key: String,
+    enabled: bool,
+    created_at: i64,
+    updated_at: i64,
+    file: WslPromptSyncFileEntry,
+}
+
+fn wsl_prompt_sync_root_dir(
+    app: &tauri::AppHandle,
+    distro: &str,
+    cli_key: &str,
+) -> AppResult<std::path::PathBuf> {
+    Ok(crate::app_paths::app_data_dir(app)?
+        .join("wsl-prompt-sync")
+        .join(distro)
+        .join(cli_key))
+}
+
+fn wsl_prompt_files_dir(root: &std::path::Path) -> std::path::PathBuf {
+    root.join("files")
+}
+
+fn wsl_prompt_manifest_path(
+    app: &tauri::AppHandle,
+    distro: &str,
+    cli_key: &str,
+) -> AppResult<std::path::PathBuf> {
+    Ok(wsl_prompt_sync_root_dir(app, distro, cli_key)?.join("manifest.json"))
+}
+
+fn read_wsl_prompt_manifest(
+    app: &tauri::AppHandle,
+    distro: &str,
+    cli_key: &str,
+) -> AppResult<Option<WslPromptManifest>> {
+    let path = wsl_prompt_manifest_path(app, distro, cli_key)?;
+    let bytes = match std::fs::read(&path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(format!("failed to read WSL prompt manifest: {err}").into());
+        }
+    };
+
+    let manifest: WslPromptManifest = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("failed to parse WSL prompt manifest: {e}"))?;
+    if manifest.managed_by != WSL_PROMPT_MANAGED_BY {
+        return Err(format!(
+            "WSL prompt manifest managed_by mismatch: expected {WSL_PROMPT_MANAGED_BY}, got {}",
+            manifest.managed_by
+        )
+        .into());
+    }
+    Ok(Some(manifest))
+}
+
+fn write_wsl_prompt_manifest(
+    app: &tauri::AppHandle,
+    distro: &str,
+    cli_key: &str,
+    manifest: &WslPromptManifest,
+) -> AppResult<()> {
+    let root = wsl_prompt_sync_root_dir(app, distro, cli_key)?;
+    std::fs::create_dir_all(&root)
+        .map_err(|e| format!("failed to create WSL prompt sync dir: {e}"))?;
+    let path = wsl_prompt_manifest_path(app, distro, cli_key)?;
+    let json = serde_json::to_string_pretty(manifest)
+        .map_err(|e| format!("failed to serialize WSL prompt manifest: {e}"))?;
+    std::fs::write(&path, json.as_bytes())
+        .map_err(|e| format!("failed to write WSL prompt manifest: {e}"))?;
     Ok(())
 }
 
@@ -721,15 +823,81 @@ esac
 }
 
 /// Sync a prompt file for a single CLI to a WSL distro.
-fn sync_wsl_prompt_for_cli(distro: &str, cli_key: &str, content: Option<&str>) -> AppResult<()> {
-    let Some(content) = content else {
-        return Ok(());
+fn backup_wsl_prompt_for_enable(
+    app: &tauri::AppHandle,
+    distro: &str,
+    cli_key: &str,
+    target_path: &str,
+    existing: Option<WslPromptManifest>,
+) -> AppResult<WslPromptManifest> {
+    let root = wsl_prompt_sync_root_dir(app, distro, cli_key)?;
+    let files_dir = wsl_prompt_files_dir(&root);
+    std::fs::create_dir_all(&files_dir)
+        .map_err(|e| format!("failed to create WSL prompt files dir: {e}"))?;
+
+    let existing_bytes = read_wsl_file(distro, target_path)?;
+    let backup_rel = if let Some(bytes) = existing_bytes {
+        let backup_name = std::path::Path::new(target_path)
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or("prompt.md")
+            .to_string();
+        let backup_path = files_dir.join(&backup_name);
+        std::fs::write(&backup_path, bytes)
+            .map_err(|e| format!("failed to write WSL prompt backup: {e}"))?;
+        Some(backup_name)
+    } else {
+        None
     };
 
-    if content.trim().is_empty() {
-        return Ok(());
+    let now = crate::shared::time::now_unix_seconds();
+    let created_at = existing.as_ref().map(|m| m.created_at).unwrap_or(now);
+    Ok(WslPromptManifest {
+        schema_version: WSL_PROMPT_MANIFEST_SCHEMA_VERSION,
+        managed_by: WSL_PROMPT_MANAGED_BY.to_string(),
+        distro: distro.to_string(),
+        cli_key: cli_key.to_string(),
+        enabled: false,
+        created_at,
+        updated_at: now,
+        file: WslPromptSyncFileEntry {
+            path: target_path.to_string(),
+            existed: backup_rel.is_some(),
+            backup_rel,
+        },
+    })
+}
+
+fn restore_wsl_prompt_from_manifest(
+    app: &tauri::AppHandle,
+    distro: &str,
+    manifest: &WslPromptManifest,
+) -> AppResult<()> {
+    let target_path = manifest.file.path.as_str();
+    if manifest.file.existed {
+        let Some(backup_rel) = manifest.file.backup_rel.as_ref() else {
+            return Err("WSL prompt restore backup missing".into());
+        };
+        let backup_root = wsl_prompt_files_dir(&wsl_prompt_sync_root_dir(
+            app,
+            &manifest.distro,
+            &manifest.cli_key,
+        )?);
+        let backup_path = backup_root.join(backup_rel);
+        let bytes = std::fs::read(&backup_path)
+            .map_err(|e| format!("failed to read WSL prompt backup: {e}"))?;
+        return write_wsl_file(distro, target_path, &bytes);
     }
 
+    remove_wsl_file(distro, target_path)
+}
+
+fn sync_wsl_prompt_for_cli(
+    app: &tauri::AppHandle,
+    distro: &str,
+    cli_key: &str,
+    content: Option<&str>,
+) -> AppResult<()> {
     if !matches!(cli_key, "claude" | "codex" | "gemini") {
         return Err(format!("unknown cli_key: {cli_key}").into());
     }
@@ -737,24 +905,53 @@ fn sync_wsl_prompt_for_cli(distro: &str, cli_key: &str, content: Option<&str>) -
     // Resolve to an absolute path inside WSL (e.g. /home/user/.codex/AGENTS.md)
     // Must NOT pass $HOME as a literal string — bash_single_quote would prevent expansion.
     let target_path = resolve_wsl_prompt_path(distro, cli_key)?;
+    let trimmed = content.map(str::trim).filter(|value| !value.is_empty());
+    let existing = read_wsl_prompt_manifest(app, distro, cli_key)?;
 
-    let bytes = prompt_sync::prompt_content_to_bytes(content);
-    write_wsl_file(distro, &target_path, &bytes)
+    match trimmed {
+        Some(content) => {
+            let should_backup = existing.as_ref().map(|m| !m.enabled).unwrap_or(true);
+            let mut manifest = if should_backup {
+                backup_wsl_prompt_for_enable(app, distro, cli_key, &target_path, existing.clone())?
+            } else {
+                existing.ok_or_else(|| "WSL prompt manifest missing while enabled".to_string())?
+            };
+
+            if should_backup {
+                write_wsl_prompt_manifest(app, distro, cli_key, &manifest)?;
+            }
+
+            let bytes = prompt_sync::prompt_content_to_bytes(content);
+            write_wsl_file(distro, &target_path, &bytes)?;
+
+            manifest.enabled = true;
+            manifest.updated_at = crate::shared::time::now_unix_seconds();
+            manifest.file.path = target_path;
+            write_wsl_prompt_manifest(app, distro, cli_key, &manifest)
+        }
+        None => {
+            let Some(mut manifest) = existing else {
+                return Ok(());
+            };
+            if !manifest.enabled {
+                return Ok(());
+            }
+
+            restore_wsl_prompt_from_manifest(app, distro, &manifest)?;
+            manifest.enabled = false;
+            manifest.updated_at = crate::shared::time::now_unix_seconds();
+            write_wsl_prompt_manifest(app, distro, cli_key, &manifest)
+        }
+    }
 }
 
 // ── Data gathering ──
 
 /// Gather MCP sync data from the database for all CLIs.
-pub fn gather_mcp_sync_data(
-    conn: &rusqlite::Connection,
-    app: &tauri::AppHandle,
-    distro: &str,
-) -> AppResult<WslMcpSyncData> {
-    let gather_for_cli = |cli_key: &str| -> AppResult<(Vec<McpServerForSync>, Vec<String>)> {
+pub fn gather_mcp_sync_data(conn: &rusqlite::Connection) -> AppResult<WslMcpSyncData> {
+    let gather_for_cli = |cli_key: &str| -> AppResult<Vec<McpServerForSync>> {
         let servers = crate::mcp::list_enabled_for_cli(conn, cli_key)?;
-        let adapted = adapt_mcp_servers_for_wsl(&servers);
-        let prev_keys = read_wsl_mcp_manifest(app, distro, cli_key);
-        Ok((adapted, prev_keys))
+        Ok(adapt_mcp_servers_for_wsl(&servers))
     };
 
     Ok(WslMcpSyncData {
@@ -1584,11 +1781,20 @@ printf 'AIO_WSL_STATUS=%s%s%s%s%s%s%s%s%s\n' "$claude" "$codex" "$gemini" "$clau
     out
 }
 
+fn wsl_target_enabled(targets: &settings::WslTargetCli, cli_key: &str) -> bool {
+    match cli_key {
+        "claude" => targets.claude,
+        "codex" => targets.codex,
+        "gemini" => targets.gemini,
+        _ => false,
+    }
+}
+
 pub fn configure_clients(
+    app: &tauri::AppHandle,
     distros: &[String],
     targets: &settings::WslTargetCli,
     proxy_origin: &str,
-    app: Option<&tauri::AppHandle>,
     mcp_data: Option<&WslMcpSyncData>,
     prompt_data: Option<&WslPromptSyncData>,
 ) -> WslConfigureReport {
@@ -1655,25 +1861,26 @@ pub fn configure_clients(
 
         // ── MCP sync ──
         if let Some(mcp) = mcp_data {
-            for (cli_key, (servers, managed_keys)) in [
+            for (cli_key, servers) in [
                 ("claude", &mcp.claude),
                 ("codex", &mcp.codex),
                 ("gemini", &mcp.gemini),
             ] {
+                if !wsl_target_enabled(targets, cli_key) {
+                    continue;
+                }
+                let managed_keys = read_wsl_mcp_manifest(app, distro, cli_key);
                 if servers.is_empty() && managed_keys.is_empty() {
                     continue;
                 }
-                match sync_wsl_mcp_for_cli(distro, cli_key, servers, managed_keys) {
+                match sync_wsl_mcp_for_cli(distro, cli_key, servers, &managed_keys) {
                     Ok(new_keys) => {
-                        if let Some(app) = app {
-                            if let Err(e) = write_wsl_mcp_manifest(app, distro, cli_key, &new_keys)
-                            {
-                                tracing::warn!(
-                                    distro = distro,
-                                    cli_key = cli_key,
-                                    "failed to write WSL MCP manifest: {e}"
-                                );
-                            }
+                        if let Err(e) = write_wsl_mcp_manifest(app, distro, cli_key, &new_keys) {
+                            tracing::warn!(
+                                distro = distro,
+                                cli_key = cli_key,
+                                "failed to write WSL MCP manifest: {e}"
+                            );
                         }
                         results.push(WslConfigureCliReport {
                             cli_key: format!("{cli_key}_mcp"),
@@ -1699,10 +1906,10 @@ pub fn configure_clients(
                 ("codex", prompts.codex_content.as_deref()),
                 ("gemini", prompts.gemini_content.as_deref()),
             ] {
-                if content.is_none() {
+                if !wsl_target_enabled(targets, cli_key) {
                     continue;
                 }
-                match sync_wsl_prompt_for_cli(distro, cli_key, content) {
+                match sync_wsl_prompt_for_cli(app, distro, cli_key, content) {
                     Ok(()) => {
                         results.push(WslConfigureCliReport {
                             cli_key: format!("{cli_key}_prompt"),

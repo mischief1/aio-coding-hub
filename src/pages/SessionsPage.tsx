@@ -1,6 +1,6 @@
 // Usage: Session viewer entry (projects list). Backend commands: `cli_sessions_projects_list`.
 
-import { useMemo, useState, useRef } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Clock, FolderOpen, Hash, Search } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -28,7 +28,9 @@ const SOURCE_TABS: Array<{ key: CliSessionsSource; label: string }> = [
 
 type ProjectSortKey = "recent" | "sessions" | "name";
 
-const IS_WINDOWS = typeof navigator !== "undefined" && /Win/.test(navigator.userAgent);
+function isWindowsRuntime() {
+  return typeof navigator !== "undefined" && /Win/.test(navigator.userAgent);
+}
 
 function normalizeSource(raw: string | null): CliSessionsSource | null {
   if (raw === "claude" || raw === "codex") return raw;
@@ -80,24 +82,25 @@ function compareProject(
 export function SessionsPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [source, setSource] = useState<CliSessionsSource>(() => {
-    return normalizeSource(searchParams.get("source")) ?? "claude";
-  });
-  const [distro, setDistro] = useState<string>(() => {
-    return searchParams.get("distro") ?? "";
-  });
+  const isWindows = isWindowsRuntime();
+  const source = normalizeSource(searchParams.get("source")) ?? "claude";
+  const distroParam = searchParams.get("distro")?.trim() ?? "";
   const [filterText, setFilterText] = useState("");
   const [sortKey, setSortKey] = useState<ProjectSortKey>("recent");
   const parentRef = useRef<HTMLDivElement>(null);
 
-  const wslDetection = useWslDetectionQuery({ enabled: IS_WINDOWS });
+  const wslDetection = useWslDetectionQuery({ enabled: isWindows });
   const wslDistros = useMemo(
     () => (wslDetection.data?.detected ? wslDetection.data.distros : []),
     [wslDetection.data]
   );
-  const showEnvSelector = IS_WINDOWS && wslDistros.length > 0;
-
-  const activeDistro = distro && wslDistros.includes(distro) ? distro : undefined;
+  const showEnvSelector = isWindows && wslDistros.length > 0;
+  const activeDistro =
+    !isWindows || !distroParam
+      ? undefined
+      : !wslDetection.isFetched || wslDistros.includes(distroParam)
+        ? distroParam
+        : undefined;
 
   const projectsQuery = useCliSessionsProjectsListQuery(source, activeDistro);
   const projects = useMemo(() => pickProjects(projectsQuery.data), [projectsQuery.data]);
@@ -128,6 +131,11 @@ export function SessionsPage() {
   const loading = projectsQuery.isLoading;
   const available: boolean | null = loading ? null : projectsQuery.data != null;
 
+  useEffect(() => {
+    setFilterText("");
+    setSortKey("recent");
+  }, [activeDistro, source]);
+
   function updateSearchParams(nextSource: CliSessionsSource, nextDistro: string) {
     const params: Record<string, string> = { source: nextSource };
     if (nextDistro) params.distro = nextDistro;
@@ -135,17 +143,11 @@ export function SessionsPage() {
   }
 
   function handleSourceChange(next: CliSessionsSource) {
-    setSource(next);
-    updateSearchParams(next, distro);
-    setFilterText("");
-    setSortKey("recent");
+    updateSearchParams(next, distroParam);
   }
 
   function handleDistroChange(next: string) {
-    setDistro(next);
     updateSearchParams(source, next);
-    setFilterText("");
-    setSortKey("recent");
   }
 
   const envLabel = activeDistro ? `WSL: ${activeDistro}` : "Windows";
